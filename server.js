@@ -1,94 +1,133 @@
-// Here is where we import modules
-// We begin by loading Express
-const express = require('express');
-const dotenv = require("dotenv"); // require package
-dotenv.config(); // Loads the environment variables from .env 
-const mongoose = require("mongoose"); 
-const app = express();
-const methodOverride = require("method-override"); // new
-const morgan = require("morgan"); //new
+/**************************************************
+ * 1️⃣ IMPORTS & CONFIG
+ **************************************************/
+const express = require("express");
+const dotenv = require("dotenv");
+const mongoose = require("mongoose");
+const methodOverride = require("method-override");
+const morgan = require("morgan");
 const path = require("path");
-mongoose.connect(process.env.MONGODB_URI);
-mongoose.connection.on("connected", () => {
-  console.log(`Connected to MongoDB ${mongoose.connection.name}.`);
-});
+const session = require("express-session");
+const MongoStore = require("connect-mongo").default;
 
-// Mount it along with our other middleware, ABOVE the routes
-app.use(express.urlencoded({ extended: false }));
-app.use(methodOverride("_method")); // new
-app.use(morgan("dev")); //new
- // new code below this line
- app.use(express.static(path.join(__dirname, "public")))
+// Controllers & Middleware
+const authController = require("./controllers/auth.js");
+const isSignedIn = require("./middleware/is-signed-in.js");
 
-// Import the Fruit model
+// Models
 const Fruit = require("./models/fruit.js");
 
-app.get('/', (req,res) => {
-    res.render("index.ejs")
-})
-// GET /
-app.get("/fruits", async (req, res) => {
-  const allFruits = await Fruit.find();
-  res.render("fruits/index.ejs", { fruits: allFruits });
+dotenv.config();
+
+const app = express();
+
+
+/**************************************************
+ * 2️⃣ DATABASE CONNECTION
+ **************************************************/
+mongoose.connect(process.env.MONGODB_URI);
+
+mongoose.connection.on("connected", () => {
+  console.log(`✅ Connected to MongoDB: ${mongoose.connection.name}`);
 });
 
 
+/**************************************************
+ * 3️⃣ GLOBAL MIDDLEWARE
+ **************************************************/
+app.use(express.urlencoded({ extended: false }));
+app.use(methodOverride("_method"));
+app.use(morgan("dev"));
+app.use(express.static(path.join(__dirname, "public")));
 
-// GET /fruits/new
-app.get("/fruits/new", (req, res) => {
+
+/**************************************************
+ * 4️⃣ SESSION CONFIGURATION
+ **************************************************/
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    store: new MongoStore({
+      mongoUrl: process.env.MONGODB_URI,
+    }),
+    cookie: {
+      maxAge: 1000 * 60 * 60 * 24,
+    },
+  })
+);
+
+
+/**************************************************
+ * 5️⃣ ROUTE MIDDLEWARE
+ **************************************************/
+app.use("/auth", authController);
+
+
+/**************************************************
+ * 6️⃣ ROUTES
+ **************************************************/
+
+// Home
+app.get("/", (req, res) => {
+  res.render("index.ejs", {
+    user: req.session.user,
+  });
+});
+
+// Protected Route
+app.get("/vip-lounge", isSignedIn, (req, res) => {
+  res.send(`Welcome to the party ${req.session.user.username}.`);
+});
+
+// Index
+app.get("/fruits",isSignedIn, async (req, res) => {
+  const fruits = await Fruit.find();
+  res.render("fruits/index.ejs", { fruits });
+});
+
+// New
+app.get("/fruits/new",isSignedIn, (req, res) => {
   res.render("fruits/new.ejs");
 });
 
-app.get("/fruits/:fruitId", async (req, res) => {
-  const foundFruit = await Fruit.findById(req.params.fruitId);
-  res.render("fruits/show.ejs", { fruit: foundFruit });
+// Show
+app.get("/fruits/:fruitId",isSignedIn, async (req, res) => {
+  const fruit = await Fruit.findById(req.params.fruitId);
+  res.render("fruits/show.ejs", { fruit });
 });
 
-
-
-// POST /fruits
-app.post("/fruits", async (req, res) => {
-  if (req.body.isReadyToEat === "on") {
-    req.body.isReadyToEat = true;
-  } else {
-    req.body.isReadyToEat = false;
-  }
+// Create
+app.post("/fruits",isSignedIn, async (req, res) => {
+  req.body.isReadyToEat = req.body.isReadyToEat === "on";
   await Fruit.create(req.body);
   res.redirect("/fruits");
 });
 
-app.delete("/fruits/:fruitId", async (req, res) => {
+// Edit
+app.get("/fruits/:fruitId/edit",isSignedIn, async (req, res) => {
+  const fruit = await Fruit.findById(req.params.fruitId);
+  res.render("fruits/edit.ejs", { fruit });
+});
+
+// Update
+app.put("/fruits/:fruitId",isSignedIn, async (req, res) => {
+  req.body.isReadyToEat = req.body.isReadyToEat === "on";
+  await Fruit.findByIdAndUpdate(req.params.fruitId, req.body);
+  res.redirect(`/fruits/${req.params.fruitId}`);
+});
+
+// Delete
+app.delete("/fruits/:fruitId",isSignedIn, async (req, res) => {
   await Fruit.findByIdAndDelete(req.params.fruitId);
   res.redirect("/fruits");
 });
 
-// GET localhost:3000/fruits/:fruitId/edit
-app.get("/fruits/:fruitId/edit", async (req, res) => {
-  const foundFruit = await Fruit.findById(req.params.fruitId);
-  res.render("fruits/edit.ejs", {
-    fruit: foundFruit,
-  });
-});
 
-// server.js
-
-app.put("/fruits/:fruitId", async (req, res) => {
-  // Handle the 'isReadyToEat' checkbox data
-  if (req.body.isReadyToEat === "on") {
-    req.body.isReadyToEat = true;
-  } else {
-    req.body.isReadyToEat = false;
-  }
-  
-  // Update the fruit in the database
-  await Fruit.findByIdAndUpdate(req.params.fruitId, req.body);
-
-  // Redirect to the fruit's show page to see the updates
-  res.redirect(`/fruits/${req.params.fruitId}`);
-});
-
-
-
+/**************************************************
+ * 7️⃣ SERVER
+ **************************************************/
 app.listen(3000, () => {
-  console.log('Listening on port 3000');
+  console.log("🚀 Listening on port 3000");
 });
